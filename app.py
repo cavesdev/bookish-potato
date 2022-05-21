@@ -148,7 +148,7 @@ class FotoDePerfilAlumno(Resource):
             setattr(alumno, 'fotoPerfilUrl', fotoUrl)
             db.session.commit()
 
-        return fotoUrl
+        return alumno.serialize()
 
 class Profesor(Resource):
     def get(self, id):
