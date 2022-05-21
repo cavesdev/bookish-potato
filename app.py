@@ -1,19 +1,25 @@
-from flask import Flask, jsonify
+import boto3
+import os
+from flask import Flask, jsonify, request
 from flask_restful import reqparse, Resource, Api
 from flask_sqlalchemy import SQLAlchemy
+from werkzeug.utils import secure_filename
 from util.utils import *
 
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///sicei.sqlite3'
+app.config['SQLALCHEMY_DATABASE_URI'] = os.getenv('DATABASE_URI') or 'sqlite:///sicei.db'
+app.config['UPLOAD_FOLDER'] = './upload'
 api = Api(app, catch_all_404s=True)
 
-ALUMNOS = []
-PROFESORES = []
+aws_bucket = 'fotos-sicei-aws'
 
 alumno_parser = create_alumno_parser()
 profesor_parser = create_profesor_parser()
 
 db = SQLAlchemy(app)
+
+if not os.path.exists('./upload'):
+    os.mkdir('./upload')
 
 class AlumnoEntity(db.Model):
     __tablename__ = 'Alumnos'
@@ -23,12 +29,14 @@ class AlumnoEntity(db.Model):
     apellidos = db.Column(db.String(100))
     matricula = db.Column(db.String(10), unique=True)
     promedio = db.Column(db.Float)
+    fotoPerfilUrl = db.Column(db.String(100))
 
     def __init__(self, nombres, apellidos, matricula, promedio):
         self.nombres = nombres
         self.apellidos = apellidos
         self.matricula = matricula
         self.promedio = promedio
+        self.fotoPerfilUrl = ''
 
     def __repr__(self):
         return f'<Alumno {self.id}>'
@@ -39,7 +47,8 @@ class AlumnoEntity(db.Model):
             'nombres': self.nombres,
             'apellidos': self.apellidos,
             'matricula': self.matricula,
-            'promedio': self.promedio
+            'promedio': self.promedio,
+            'fotoPerfilUrl': self.fotoPerfilUrl
         }
 
 class ProfesorEntity(db.Model):
@@ -120,6 +129,27 @@ class ListaDeAlumnos(Resource):
         return alumno.serialize(), 201
 
 
+class FotoDePerfilAlumno(Resource):
+    def post(self, id):
+        alumno = AlumnoEntity \
+        .query \
+        .filter_by(id=id) \
+        .first_or_404(description=f'Alumno con ID {id} no encontrado.')
+
+        fotoUrl = ''
+
+        if 'foto' in request.files:
+            file = request.files['foto']
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+
+            fotoUrl = upload_file_to_s3(file_path, aws_bucket)
+            setattr(alumno, 'fotoPerfilUrl', fotoUrl)
+            db.session.commit()
+
+        return fotoUrl
+
 class Profesor(Resource):
     def get(self, id):
         profesor = ProfesorEntity \
@@ -170,6 +200,7 @@ class ListaDeProfesores(Resource):
 
 api.add_resource(ListaDeAlumnos, '/alumnos')
 api.add_resource(Alumno, '/alumnos/<id>')
+api.add_resource(FotoDePerfilAlumno, '/alumnos/<id>/fotoPerfil')
 
 api.add_resource(ListaDeProfesores, '/profesores')
 api.add_resource(Profesor, '/profesores/<id>')
